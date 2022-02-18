@@ -1,0 +1,202 @@
+#include <Wire.h>
+#include <SPI.h>
+#include <Adafruit_BMP280.h>
+#include <SD.h>
+File myFile;
+const int chipSelect = 10;
+long timer;
+long ztimer;
+const int MPU_ADDR = 0x68; // I2C address of the MPU-6050. If AD0 pin is set to HIGH, the I2C address will be 0x69.
+int16_t accelerometer_x, accelerometer_y, accelerometer_z; // variables for accelerometer raw data
+int16_t gyro_x, gyro_y, gyro_z; // variables for gyro raw data
+int16_t temperature; // variables for temperature data
+int16_t zaccelx, zaccely, zaccelz; //define zeroed values
+int16_t xzvalue = 0;  //50
+int16_t yzvalue = -200;   //-500
+int16_t zzvalue = 14800;  //14800
+char tmp_str[7]; // temporary variable used in convert function
+char* convert_int16_to_str(int16_t i) { // converts int16 to string. Moreover, resulting strings will have the same length in the debug monitor.
+  sprintf(tmp_str, "%6d", i);
+  return tmp_str;
+}
+
+
+
+bool launch = false;
+bool apogee = false;
+bool landed = false;
+
+double preAlt = 0;
+double curAlt = 0;
+//array of type [pre, cur]
+double AltList[] = {0,0};
+double difAlt;
+
+
+
+/////////////////////////////////////////////////////////////////////
+
+const float LaunchThreshold = 0.75;
+/////////////////////////////////////////////////////////////////////
+
+const float ApogeeThreshold = 1;
+/////////////////////////////////////////////////////////////////////
+
+Adafruit_BMP280 bmp; // use I2C interface
+Adafruit_Sensor *bmp_temp = bmp.getTemperatureSensor();
+Adafruit_Sensor *bmp_pressure = bmp.getPressureSensor();
+
+void setup() {
+  Serial.begin(9600);
+  Serial.println(F("BMP280 Sensor event test"));
+
+  //if (!bmp.begin(BMP280_ADDRESS_ALT, BMP280_CHIPID)) {
+  //if (!bmp.begin()) {
+  //  Serial.println(F("Could not find a valid BMP280 sensor, check wiring or "
+  //                    "try a different address!"));
+  //  while (1) delay(10);
+  //}
+  bmp.begin();
+  /* Default settings from datasheet. */
+  bmp.setSampling(Adafruit_BMP280::MODE_NORMAL,     /* Operating Mode. */
+                  Adafruit_BMP280::SAMPLING_X1,     /* Temp. oversampling */
+                  Adafruit_BMP280::SAMPLING_X2,    /* Pressure oversampling */
+                  Adafruit_BMP280::FILTER_X2,      /* Filtering. */
+                  Adafruit_BMP280::STANDBY_MS_1); /* Standby time. */
+
+  bmp_temp->printSensorDetails();
+  delay(5000);
+  SD.begin(chipSelect);
+  myFile = SD.open("HOME_TEST.txt", FILE_WRITE);
+  myFile.println("time,pressure,altitude,temp,xaccel,yaccel,zacccel,preAlt,curAlt");
+  Serial.println("time,pressure,altitude,temp,xaccel,yaccel,zacccel,preAlt,curAlt");
+  myFile.close();
+  Wire.begin();
+  Wire.beginTransmission(MPU_ADDR); // Begins a transmission to the I2C slave (GY-521 board)
+  Wire.write(0x6B); // PWR_MGMT_1 register
+  Wire.write(0); // set to zero (wakes up the MPU-6050)
+  Wire.endTransmission(true);
+
+ 
+  //Serial.println("x y z");
+  delay(5000);
+  ztimer = millis();
+ 
+ 
+}
+
+void loop() {
+
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+
+  preAlt = bmp.readAltitude(1013.25);
+ 
+  while(!launch){
+    timer = millis() - ztimer;
+
+    myFile = SD.open("HOME_TEST.txt", FILE_WRITE);
+    
+    sensors_event_t temp_event, pressure_event;
+    bmp_temp->getEvent(&temp_event);
+    bmp_pressure->getEvent(&pressure_event);
+    
+    Wire.beginTransmission(MPU_ADDR);
+    Wire.write(0x3B); // starting with register 0x3B (ACCEL_XOUT_H) [MPU-6000 and MPU-6050 Register Map and Descriptions Revision 4.2, p.40]
+    Wire.endTransmission(false); // the parameter indicates that the Arduino will send a restart. As a result, the connection is kept active.
+    Wire.requestFrom(MPU_ADDR, 7*2, true); // request a total of 7*2=14 registers
+    
+    // "Wire.read()<<8 | Wire.read();" means two registers are read and stored in the same variable
+    accelerometer_x = Wire.read()<<8 | Wire.read(); // reading registers: 0x3B (ACCEL_XOUT_H) and 0x3C (ACCEL_XOUT_L)
+    accelerometer_y = Wire.read()<<8 | Wire.read(); // reading registers: 0x3D (ACCEL_YOUT_H) and 0x3E (ACCEL_YOUT_L)
+    accelerometer_z = Wire.read()<<8 | Wire.read(); // reading registers: 0x3F (ACCEL_ZOUT_H) and 0x40 (ACCEL_ZOUT_L)
+     
+    zaccelx = accelerometer_x - xzvalue;
+    zaccely = accelerometer_y - yzvalue;
+    zaccelz = accelerometer_z - zzvalue;
+
+        
+    curAlt = bmp.readAltitude(1013.25);
+    //Serial.print("cur alt" + String(curAlt));
+    //Serial.print("pre alt" + String(preAlt));
+    difAlt = curAlt - preAlt;
+    //Serial.println("//dif alt" + String(difAlt));
+
+
+    myFile.println(""+String(timer)+","+String(pressure_event.pressure)+","+String(bmp.readAltitude(1013.25))+","+String(temp_event.temperature)+","+convert_int16_to_str(zaccelx)+","+convert_int16_to_str(zaccely)+","+convert_int16_to_str(zaccelz)+","+String(preAlt)+","+String(curAlt));
+    Serial.println(""+String(timer)+","+String(pressure_event.pressure)+","+String(bmp.readAltitude(1013.25))+","+String(temp_event.temperature)+","+convert_int16_to_str(zaccelx)+","+convert_int16_to_str(zaccely)+","+convert_int16_to_str(zaccelz)+","+String(preAlt)+","+String(curAlt));
+
+
+    if(difAlt > LaunchThreshold){
+      launch = true;
+      Serial.println("///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////// /n //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////n /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////");
+      break;
+    }
+
+    
+    preAlt = bmp.readAltitude(1013.25);
+    
+    myFile.close();
+    delay(10);
+    
+  }
+
+ 
+
+  Serial.println("launched");
+
+
+    while(!apogee){
+    timer = millis() - ztimer;
+
+    myFile = SD.open("HOME_TEST.txt", FILE_WRITE);
+    
+    sensors_event_t temp_event, pressure_event;
+    bmp_temp->getEvent(&temp_event);
+    bmp_pressure->getEvent(&pressure_event);
+    
+    Wire.beginTransmission(MPU_ADDR);
+    Wire.write(0x3B); // starting with register 0x3B (ACCEL_XOUT_H) [MPU-6000 and MPU-6050 Register Map and Descriptions Revision 4.2, p.40]
+    Wire.endTransmission(false); // the parameter indicates that the Arduino will send a restart. As a result, the connection is kept active.
+    Wire.requestFrom(MPU_ADDR, 7*2, true); // request a total of 7*2=14 registers
+    
+    // "Wire.read()<<8 | Wire.read();" means two registers are read and stored in the same variable
+    accelerometer_x = Wire.read()<<8 | Wire.read(); // reading registers: 0x3B (ACCEL_XOUT_H) and 0x3C (ACCEL_XOUT_L)
+    accelerometer_y = Wire.read()<<8 | Wire.read(); // reading registers: 0x3D (ACCEL_YOUT_H) and 0x3E (ACCEL_YOUT_L)
+    accelerometer_z = Wire.read()<<8 | Wire.read(); // reading registers: 0x3F (ACCEL_ZOUT_H) and 0x40 (ACCEL_ZOUT_L)
+     
+    zaccelx = accelerometer_x - xzvalue;
+    zaccely = accelerometer_y - yzvalue;
+    zaccelz = accelerometer_z - zzvalue;
+
+   
+    
+    
+    curAlt = bmp.readAltitude(1013.25);
+    //Serial.print("cur alt" + String(curAlt));
+    //Serial.print("pre alt" + String(preAlt));
+    
+    
+    myFile.println(""+String(timer)+","+String(pressure_event.pressure)+","+String(bmp.readAltitude(1013.25))+","+String(temp_event.temperature)+","+convert_int16_to_str(zaccelx)+","+convert_int16_to_str(zaccely)+","+convert_int16_to_str(zaccelz)+","+String(preAlt)+","+String(curAlt));
+    Serial.println(""+String(timer)+","+String(pressure_event.pressure)+","+String(bmp.readAltitude(1013.25))+","+String(temp_event.temperature)+","+convert_int16_to_str(zaccelx)+","+convert_int16_to_str(zaccely)+","+convert_int16_to_str(zaccelz)+","+String(preAlt)+","+String(curAlt));
+
+    if((curAlt + ApogeeThreshold) < preAlt){
+      apogee = true;
+      Serial.println("///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////// /n //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////n /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////");
+      break;
+    }
+
+    preAlt = bmp.readAltitude(1013.25);
+
+    myFile.close();
+    delay(10);
+    
+  }
+  Serial.println("apogee");
+  //myFile.close();
+
+}
